@@ -18,18 +18,18 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Enable Apache rewrite module
+# Enable Apache modules
 RUN a2enmod rewrite
 
-# Configure Apache to use Render's default port 10000
+# Change Apache to listen on Render's default port 10000
 RUN sed -i 's/Listen 80/Listen 10000/' /etc/apache2/ports.conf \
     && sed -i 's/<VirtualHost \*:80>/<VirtualHost *:10000>/' /etc/apache2/sites-available/000-default.conf
 
-# Set Laravel's public folder as DocumentRoot
+# Set Laravel public folder as document root
 RUN sed -i 's|/var/www/html|/var/www/html/public|g' /etc/apache2/sites-available/000-default.conf \
     && sed -i 's|/var/www/html|/var/www/html/public|g' /etc/apache2/apache2.conf
 
-# Allow .htaccess overrides for Laravel
+# Allow .htaccess overrides
 RUN echo '<Directory /var/www/html/public>\n\
     AllowOverride All\n\
     Require all granted\n\
@@ -38,29 +38,34 @@ RUN echo '<Directory /var/www/html/public>\n\
 
 # Install Node.js 20
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+    && apt-get install -y nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-# Copy application files
+# Copy application code (including package-lock.json)
 COPY . .
 
-# Install PHP dependencies (production only)
+# Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
 
 # Install frontend dependencies and build assets
-RUN npm ci --only=production && npm run build
+# If package-lock.json exists, use npm ci; otherwise fall back to npm install
+RUN if [ -f package-lock.json ]; then \
+        npm ci --omit=dev && npm run build; \
+    elif [ -f package.json ]; then \
+        npm install --production && npm run build; \
+    else \
+        echo "No package.json found - skipping npm build"; \
+    fi
 
-# Create storage symlink
-RUN php artisan storage:link --force || true
-
-# Set proper permissions
-RUN mkdir -p storage/framework/{cache,sessions,views} \
-    bootstrap/cache \
-    public/uploads \
+# Storage symlink + permissions
+RUN php artisan storage:link --force || true \
+    && mkdir -p storage/framework/{sessions,views,cache} bootstrap/cache public/uploads \
     && chown -R www-data:www-data storage bootstrap/cache public/uploads \
     && chmod -R 775 storage bootstrap/cache public/uploads
 
